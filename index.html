@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simulador Financiero - Apoyo 2048 y CP</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800">
+  
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+
+    function SimuladorFinanciero() {
+      // ========================= CONSTANTES =========================
+      const valorOriginalSemestre = 26860000;
+      const valorBaseSemestre = 9132400; // Con beca del 66%
+
+      // ========================= ESTADOS GENERALES =========================
+      const [tabActivo, setTabActivo] = useState('pregrado');
+      const [pregradosTipo, setPregradosTipo] = useState('2048');
+      
+      // Estados para Apoyo 2048
+      const [porcentaje2048, setPorcentaje2048] = useState(75);
+      const interes2048 = 0.01; // 1% MV
+      
+      // Estados para Apoyo CP
+      const [porcentajeCP, setPorcentajeCP] = useState(75);
+      const interesCP = 0.011; // 1.1% MV
+
+      // ========================= POSGRADOS =========================
+      const valorCreditoPosgrado = 1867000; // valor por crédito
+
+      const programas = [
+        { id: 'maestria_investigacion', nombre: 'Maestría Investigación', creditos: 36, tipo: 'maestria' },
+        { id: 'maestria_profundizacion', nombre: 'Maestría Profundización', creditos: 32, tipo: 'maestria', descuentoCredito: 0.12 },
+        { id: 'esp_innovacion', nombre: 'Especialización Innovación Curricular y Pedagógica', creditos: 18, tipo: 'especializacion' },
+        { id: 'esp_liderazgo', nombre: 'Especialización Liderazgo y Política Educativa', creditos: 18, tipo: 'especializacion' }
+      ];
+
+      const [programaSeleccionado, setProgramaSeleccionado] = useState(programas[0].id);
+      const [porcentajePosgrado, setPorcentajePosgrado] = useState(75);
+      // Apoyos: 'vega_corto', 'vega_mediano', 'progresandes'
+      const [apoyoPosgrado, setApoyoPosgrado] = useState('vega_corto');
+      const tasaVegaCorto = 0.01;
+      const tasaVegaMediano = 0.013;
+      const tasaProgresandes = 0.01;
+      const avalPorcentaje = 0.02;
+
+      const tasaPosgrado = apoyoPosgrado === 'vega_mediano' ? tasaVegaMediano : (apoyoPosgrado === 'progresandes' ? tasaProgresandes : tasaVegaCorto);
+
+      const formatCurrency = (value) => {
+        return new Intl.NumberFormat('es-CO', {
+          style: 'currency',
+          currency: 'COP',
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0,
+        }).format(value);
+      };
+
+      // Helper: créditos por semestre según programa
+      const getCreditsPerSemester = (progId) => {
+        switch (progId) {
+          case 'maestria_investigacion':
+            return [8, 8, 12, 8]; // 36
+          case 'maestria_profundizacion':
+            return [8, 8, 8, 8]; // 32
+          case 'esp_innovacion':
+            return [8, 10]; // 18
+          case 'esp_liderazgo':
+            return [8, 10]; // 18
+          default:
+            return [8, 8, 8, 8];
+        }
+      };
+
+      // ==================== CÁLCULO APOYO 2048 ====================
+      const datos2048 = useMemo(() => {
+        const montoFinanciadoPorSemestre = valorBaseSemestre * (porcentaje2048 / 100);
+        const copago = valorBaseSemestre - montoFinanciadoPorSemestre;
+
+        const listaMeses = [];
+        const numSemestres = 8;
+        const mesesCicloSemestre = 6;
+        const mesesEstudio = numSemestres * mesesCicloSemestre;
+        // El plazo post-estudio será como máximo el doble del tiempo financiado (p. ej. 48 -> 96)
+        const mesesPost = mesesEstudio * 2; // amortización post-estudio basada en duración financiada
+
+        let maxCuota = 0;
+        let mesMaxCuota = 1;
+        let totalIntereses = 0;
+
+        const calcularCuotaFija = (capital, tasa, periodos) => {
+          if (capital === 0) return 0;
+          const factor = tasa * Math.pow(1 + tasa, periodos);
+          return capital * factor / (Math.pow(1 + tasa, periodos) - 1);
+        };
+
+        // 1) Durante el estudio: cada semestre se amortiza el 40% de su financiación
+        const porcentajeDurante = 0.4;
+        const porcentajeDespues = 0.6;
+
+        // Mantener suma de la parte pendiente (60%) de los semestres ya desembolsados
+        let pendienteAcumulado = 0;
+        for (let s = 0; s < numSemestres; s++) {
+          const mesInicio = 1 + s * mesesCicloSemestre;
+          const capitalSem = montoFinanciadoPorSemestre;
+          const capitalDurante = capitalSem * porcentajeDurante;
+          const capitalPendiente = capitalSem * porcentajeDespues;
+
+          // al inicio del semestre se desembolsa la financiación completa para ese semestre,
+          // por lo que el pendiente acumulado aumenta con la parte que se pospone (60%)
+          pendienteAcumulado += capitalPendiente;
+
+          const mesesDurante = mesesCicloSemestre; // distribuir durante el semestre
+          const cuotaDurante = calcularCuotaFija(capitalDurante, interes2048, mesesDurante);
+
+          let saldo = capitalDurante;
+          for (let m = 0; m < mesesDurante; m++) {
+            const mes = mesInicio + m;
+            const intAmort = Math.max(0, saldo * interes2048); // interés sobre la parte amortizada
+            const intPendiente = Math.max(0, pendienteAcumulado * interes2048); // interés sobre la parte 60% pendiente
+            const capMes = Math.max(0, cuotaDurante - intAmort);
+            const matriculaMes = (m === 0) ? copago : 0; // unir matrícula con primera cuota
+            const pagoMes = cuotaDurante + intPendiente + matriculaMes;
+            // saldo mostrado es la suma del saldo de la parte amortizada antes del pago más el pendiente acumulado
+            const saldoAntes = saldo + pendienteAcumulado;
+            saldo = Math.max(0, saldo - capMes);
+            totalIntereses += (intAmort + intPendiente);
+            if (pagoMes > maxCuota) { maxCuota = pagoMes; mesMaxCuota = mes; }
+            listaMeses.push({ mes, copagoMes: matriculaMes, cuotaCapital: capMes, cuotaInteres: intAmort + intPendiente, totalMes: pagoMes, saldoDeudaGlobal: saldoAntes });
+          }
+        }
+
+        // 2) Después del estudio: amortizar el 60% de toda la financiación acumulada
+        const totalFinanciado = montoFinanciadoPorSemestre * numSemestres;
+        const capitalPost = totalFinanciado * porcentajeDespues;
+        const cuotaPost = calcularCuotaFija(capitalPost, interes2048, mesesPost);
+        let saldoPost = capitalPost;
+        for (let i = 1; i <= mesesPost; i++) {
+          const mes = mesesEstudio + i;
+          const intMes = Math.max(0, saldoPost * interes2048);
+          const capMes = Math.max(0, cuotaPost - intMes);
+          const pago = capMes + intMes;
+          const saldoAntes = saldoPost;
+          saldoPost = Math.max(0, saldoPost - capMes);
+          totalIntereses += intMes;
+          if (pago > maxCuota) { maxCuota = pago; mesMaxCuota = mes; }
+          listaMeses.push({ mes, copagoMes: 0, cuotaCapital: capMes, cuotaInteres: intMes, totalMes: pago, saldoDeudaGlobal: saldoAntes });
+        }
+
+        return {
+          cronograma: listaMeses,
+          metricas: {
+            maxCuota,
+            mesMaxCuota,
+            totalInversionBeca: valorBaseSemestre * numSemestres,
+            totalInversionSinBeca: valorOriginalSemestre * numSemestres,
+            totalFinanciado: totalFinanciado,
+            totalCopagos: copago * numSemestres,
+            totalIntereses: totalIntereses,
+            durationEstudio: mesesEstudio,
+            postMonths: mesesPost,
+            totalMonths: mesesEstudio + mesesPost
+          }
+        };
+      }, [porcentaje2048]);
+
+      // ==================== CÁLCULO APOYO CP ====================
+      const datosCP = useMemo(() => {
+        // CP máximo 75%
+        const pctCP = Math.min(porcentajeCP, 75);
+        const montoFinanciado = valorBaseSemestre * (pctCP / 100);
+        const copago = valorBaseSemestre - montoFinanciado;
+
+        const listaMeses = [];
+        const numSemestres = 8;
+        const mesesCicloSemestre = 6;
+        const totalMesesProyeccion = 58;
+        const mesesCuota = 5; // CP en 5 cuotas
+
+        let maxCuota = 0;
+        let mesMaxCuota = 1;
+        let totalIntereses = 0;
+
+        // Calcular cuota fija mediante fórmula francesa
+        const calcularCuotaFija = (capital, tasa, periodos) => {
+          if (capital === 0) return 0;
+          const factor = tasa * Math.pow(1 + tasa, periodos);
+          return capital * factor / (Math.pow(1 + tasa, periodos) - 1);
+        };
+
+        // Precalcular cuotas por semestre
+        const cuotasPorSemestre = new Array(numSemestres).fill(0);
+        for (let s = 0; s < numSemestres; s++) {
+          cuotasPorSemestre[s] = calcularCuotaFija(montoFinanciado, interesCP, mesesCuota);
+        }
+
+        for (let m = 1; m <= totalMesesProyeccion; m++) {
+          let cuotaCapital = 0;
+          let cuotaInteres = 0;
+          let copagoMes = 0;
+          let saldoDeudaGlobal = 0;
+
+          for (let s = 1; s <= numSemestres; s++) {
+            const mesInicio = 1 + (s - 1) * mesesCicloSemestre;
+            const mesRelativo = m - mesInicio + 1;
+
+            // CP solo en 5 meses (después de legalizar matrícula)
+            if (mesRelativo >= 1 && mesRelativo <= mesesCuota) {
+              const cuotaFija = cuotasPorSemestre[s - 1];
+              
+              // Amortización - calcular saldo antes de este pago
+              let saldoActual = montoFinanciado;
+              for (let i = 1; i < mesRelativo; i++) {
+                const intMes = saldoActual * interesCP;
+                const capMes = cuotaFija - intMes;
+                saldoActual -= capMes;
+              }
+
+              const intMes = Math.max(0, saldoActual * interesCP);
+              const capMes = cuotaFija - intMes;
+
+              cuotaCapital += capMes;
+              cuotaInteres += intMes;
+              saldoDeudaGlobal += Math.max(0, saldoActual);
+            }
+
+            if (mesRelativo === 1) {
+              copagoMes += copago;
+            }
+          }
+
+          const totalMes = cuotaCapital + cuotaInteres + copagoMes;
+          totalIntereses += cuotaInteres;
+
+          if (totalMes > maxCuota) {
+            maxCuota = totalMes;
+            mesMaxCuota = m;
+          }
+
+          listaMeses.push({
+            mes: m,
+            copagoMes,
+            cuotaCapital,
+            cuotaInteres,
+            totalMes,
+            saldoDeudaGlobal
+          });
+        }
+
+        return {
+          cronograma: listaMeses,
+          metricas: {
+            maxCuota,
+            mesMaxCuota,
+            totalInversionBeca: valorBaseSemestre * numSemestres,
+            totalInversionSinBeca: valorOriginalSemestre * numSemestres,
+            totalFinanciado: montoFinanciado * numSemestres,
+            totalCopagos: copago * numSemestres,
+            totalIntereses: totalIntereses,
+            totalMonths: numSemestres * mesesCicloSemestre
+          }
+        };
+      }, [porcentajeCP]);
+
+      // ==================== CÁLCULO POSGRADOS ====================
+      const datosPosgrado = useMemo(() => {
+        const prog = programas.find(p => p.id === programaSeleccionado) || programas[0];
+        const creditsPerSemester = getCreditsPerSemester(prog.id);
+        const numSemestresEstudio = creditsPerSemester.length;
+        const mesesPosgrado = numSemestresEstudio * 6;
+
+        const precioCredito = valorCreditoPosgrado * (prog.descuentoCredito ? (1 - prog.descuentoCredito) : 1);
+        const valorMatriculaPorSemestre = creditsPerSemester.map(c => c * precioCredito);
+
+        const pctFinanciamiento = Math.min(Math.max(porcentajePosgrado, 0), 100);
+        const valorFinanciadoPorSemestre = valorMatriculaPorSemestre.map(v => v * (pctFinanciamiento / 100));
+        const copagoPorSemestre = valorMatriculaPorSemestre.map((v, i) => v - valorFinanciadoPorSemestre[i]);
+        const valorMatriculaFinanciada = valorFinanciadoPorSemestre.reduce((a,b) => a + b, 0);
+
+        const listaMeses = [];
+        let maxCuota = 0;
+        let mesMaxCuota = 1;
+        let totalIntereses = 0;
+        let totalAval = 0;
+
+        const esMesInicioSemestre = (mes) => ((mes - 1) % 6 === 0) && (Math.floor((mes - 1) / 6) < numSemestresEstudio);
+
+        // ===== Corto plazo y Progresandes: financiar por semestre y amortizar cada semestre en 5 meses =====
+        if (apoyoPosgrado === 'vega_corto' || apoyoPosgrado === 'progresandes') {
+          const tasa = apoyoPosgrado === 'progresandes' ? tasaProgresandes : tasaVegaCorto;
+
+          // For each semester, create a 5-month amortization schedule starting at semester start
+          for (let s = 0; s < numSemestresEstudio; s++) {
+            const mesInicio = 1 + s * 6;
+            const capitalSem = valorFinanciadoPorSemestre[s];
+
+              // amortización en 5 meses para el capital de esa semestre
+              const mesesCuota = 5;
+              const calcularCuota = (capital, tasaMensual, periodos) => {
+                if (capital === 0) return 0;
+                const factor = tasaMensual * Math.pow(1 + tasaMensual, periodos);
+                return capital * factor / (Math.pow(1 + tasaMensual, periodos) - 1);
+              };
+              const cuotaMensual = calcularCuota(capitalSem, tasa, mesesCuota);
+
+              let saldo = capitalSem;
+              for (let m = 0; m < mesesCuota; m++) {
+                const mes = mesInicio + m;
+                const intMes = Math.max(0, saldo * tasa);
+                const capMes = Math.max(0, cuotaMensual - intMes);
+                saldo = Math.max(0, saldo - capMes);
+                // En el primer mes unimos la matrícula (copago) con la primera cuota en la misma fila
+                const matriculaMes = (m === 0) ? copagoPorSemestre[s] : 0;
+                const pago = cuotaMensual;
+                totalIntereses += intMes;
+                // considerar matrícula como parte del pago pico para detección de mesMaxCuota
+                const pagoTotalMes = pago + matriculaMes;
+                if (pagoTotalMes > maxCuota) { maxCuota = pagoTotalMes; mesMaxCuota = mes; }
+                listaMeses.push({ mes, tipo: 'estudio', pago, capital: capMes, interes: intMes, aval: 0, matricula: matriculaMes, saldoDeuda: saldo });
+              }
+          }
+
+        } else if (apoyoPosgrado === 'vega_mediano') {
+          // mediano plazo: durante estudio pagar intereses mensuales sobre saldo acumulado; aval cobrado al inicio de cada semestre; capital después en 48 meses
+          const tasa = tasaVegaMediano;
+
+          // track financed balance as semesters are disbursed
+          let saldoFinanciadoAcumulado = 0;
+
+          for (let s = 0; s < numSemestresEstudio; s++) {
+            const mesInicio = 1 + s * 6;
+            const capitalSem = valorFinanciadoPorSemestre[s];
+            saldoFinanciadoAcumulado += capitalSem;
+
+            // aval and copago at semester start
+            const avalSem = capitalSem * avalPorcentaje;
+            totalAval += avalSem;
+            const pagosAdicionales = copagoPorSemestre[s] + avalSem;
+            const intMes = saldoFinanciadoAcumulado * tasa;
+            const pagoInicio = intMes + pagosAdicionales;
+            totalIntereses += intMes;
+            if (pagoInicio > maxCuota) { maxCuota = pagoInicio; mesMaxCuota = mesInicio; }
+            listaMeses.push({ mes: mesInicio, tipo: 'estudio', pago: pagoInicio, capital: 0, interes: intMes, aval: avalSem, matricula: copagoPorSemestre[s], saldoDeuda: saldoFinanciadoAcumulado });
+
+            // for the remaining 5 months within the semester, pay interest on accumulated balance
+            for (let m = 1; m < 6; m++) {
+              const mes = mesInicio + m;
+              const intMesInner = saldoFinanciadoAcumulado * tasa;
+              totalIntereses += intMesInner;
+              if (intMesInner > maxCuota) { maxCuota = intMesInner; mesMaxCuota = mes; }
+              listaMeses.push({ mes, tipo: 'estudio', pago: intMesInner, capital: 0, interes: intMesInner, aval: 0, matricula: 0, saldoDeuda: saldoFinanciadoAcumulado });
+            }
+          }
+
+          // Post-grado amortización en 48 meses sobre total financiado
+          const mesesAmortizacion = 48;
+          const cuotaCapital = valorMatriculaFinanciada / mesesAmortizacion;
+          for (let m = 1; m <= mesesAmortizacion; m++) {
+            const mes = mesesPosgrado + m;
+            const saldoAnterior = Math.max(0, valorMatriculaFinanciada - ((m - 1) * cuotaCapital));
+            const intMes = saldoAnterior * tasa;
+            const totalPago = cuotaCapital + intMes;
+            totalIntereses += intMes;
+            if (totalPago > maxCuota) { maxCuota = totalPago; mesMaxCuota = mes; }
+            listaMeses.push({ mes, tipo: 'postgrado', pago: totalPago, capital: cuotaCapital, interes: intMes, aval: 0, matricula: 0, saldoDeuda: Math.max(0, saldoAnterior - cuotaCapital) });
+          }
+        }
+
+        return {
+          cronograma: listaMeses,
+          metricas: {
+            maxCuota,
+            mesMaxCuota,
+            valorTotalMatricula: valorMatriculaPorSemestre.reduce((a,b) => a + b, 0),
+            valorMatriculaFinanciada,
+            copagoPosgrado: copagoPorSemestre.reduce((a,b) => a + b, 0),
+            porcentajeFinanciamiento: pctFinanciamiento,
+            totalCreditos: creditsPerSemester.reduce((a,b) => a + b, 0),
+            totalIntereses: totalIntereses || 0,
+            totalAval: totalAval || 0,
+            durationEstudio: mesesPosgrado,
+            numSemestresEstudio,
+            copagoPorSemestre,
+            valorMatriculaPorSemestre
+          }
+        };
+      }, [programaSeleccionado, porcentajePosgrado, apoyoPosgrado]);
+
+      // (Posgrados: cálculo y UI integrados abajo)
+
+      const datosActuales = tabActivo === 'posgrado' ? datosPosgrado : (pregradosTipo === '2048' ? datos2048 : datosCP);
+      const porcentajeActual = tabActivo === 'posgrado' ? porcentajePosgrado : (pregradosTipo === '2048' ? porcentaje2048 : porcentajeCP);
+      const setPorcentajeActual = tabActivo === 'posgrado' ? setPorcentajePosgrado : (pregradosTipo === '2048' ? setPorcentaje2048 : setPorcentajeCP);
+      const maxPorcentaje = tabActivo === 'posgrado' ? 100 : (pregradosTipo === '2048' ? 95 : 75);
+
+      // calcular cuántos meses mostrar en la tabla según producto seleccionado
+      const maxMesCronograma = datosActuales.cronograma.length ? datosActuales.cronograma.reduce((mx,it) => Math.max(mx, it.mes), 0) : 0;
+      let displayMonths = maxMesCronograma;
+      if (tabActivo !== 'posgrado') {
+        if (pregradosTipo === '2048') displayMonths = datos2048.metricas.totalMonths; // mostrar estudio + post-estudio (48+96)
+        else displayMonths = datosCP.metricas.totalMonths; // CP: mostrar hasta duración del estudio (ej. 48)
+      }
+
+      return (
+        <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6">
+          
+          {/* Header */}
+          <div className="bg-gradient-to-r from-emerald-950 to-blue-950 text-white p-6 md:p-8 rounded-3xl shadow-2xl border-b-4 border-emerald-500">
+            <div className="flex flex-col lg:flex-row justify-between items-center gap-6">
+              <div className="text-center lg:text-left">
+                <span className="text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest bg-emerald-800 text-emerald-300">
+                  Simulación Completa de Carrera (8 Semestres)
+                </span>
+                <h1 className="text-3xl font-extrabold mt-2">Plan de Proyección Financiera</h1>
+                <p className="text-gray-300 text-sm mt-1">Facultad de Educación / Universidad de los Andes</p>
+              </div>
+              <div className="bg-white/10 p-4 rounded-2xl border border-white/20 text-center min-w-[280px] backdrop-blur-sm">
+                <span className="text-xs font-medium text-emerald-300 block uppercase">Ahorro Total por Beca del 66%</span>
+                <span className="text-2xl font-black text-white">{formatCurrency(datosActuales.metricas.totalInversionSinBeca - datosActuales.metricas.totalInversionBeca)}</span>
+                <span className="text-[11px] text-gray-300 block mt-1">Costo sin beca: {formatCurrency(datosActuales.metricas.totalInversionSinBeca)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex gap-3 flex-wrap">
+            <button 
+              onClick={() => setTabActivo('pregrado')}
+              className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all ${
+                tabActivo === 'pregrado' 
+                  ? 'bg-emerald-700 text-white shadow-lg scale-105' 
+                  : 'bg-white text-gray-600 border border-gray-200'
+              }`}
+            >
+              🎓 Pregrados
+            </button>
+            <button 
+              onClick={() => setTabActivo('posgrado')}
+              className={`px-6 py-3 rounded-2xl font-bold text-sm transition-all ${
+                tabActivo === 'posgrado' 
+                  ? 'bg-purple-700 text-white shadow-lg scale-105' 
+                  : 'bg-white text-gray-600 border border-gray-200'
+              }`}
+            >
+              🎓 Posgrados
+            </button>
+          </div>
+
+          {/* Descripción del producto */}
+          <div className={`p-4 rounded-2xl border-l-4 ${tabActivo === 'pregrado' ? 'bg-emerald-50 border-emerald-500' : 'bg-purple-50 border-purple-500'}`}>
+            <p className="text-sm font-semibold text-gray-800">
+              {tabActivo === 'pregrado' 
+                ? (pregradosTipo === '2048' ? '40% durante estudios y 60% al finalizar | Tasa: 1.0% M.V.' : 'Hasta 75% financiado en 5 cuotas mensuales | Tasa: 1.1% M.V.')
+                : 'Vega Lara — Corto: amortiza cada semestre en 5 meses (1.0% M.V.). Vega Lara — Mediano: paga intereses durante estudios + aval 2%, capital pos‑estudio (1.3% M.V.). Progresandes (solo Esp. Liderazgo): apoyo corto plazo (1.0% M.V.).'}
+            </p>
+          </div>
+
+          {/* Controles de Pregrados */}
+          {tabActivo === 'pregrado' && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <span className="text-xs font-bold text-gray-400 uppercase block">Tipo de Apoyo</span>
+                <div className="mt-3 flex gap-2 flex-col">
+                  <button onClick={() => setPregradosTipo('2048')} className={`py-2 rounded-lg font-bold text-sm ${pregradosTipo === '2048' ? 'bg-emerald-700 text-white' : 'bg-gray-100 text-gray-700'}`}>Apoyo 2048</button>
+                  <button onClick={() => setPregradosTipo('CP')} className={`py-2 rounded-lg font-bold text-sm ${pregradosTipo === 'CP' ? 'bg-blue-700 text-white' : 'bg-gray-100 text-gray-700'}`}>Apoyo CP</button>
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <span className="text-xs font-bold text-gray-400 uppercase block">% a Financiar</span>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-2xl font-black text-gray-900">{pregradosTipo === '2048' ? porcentaje2048 : porcentajeCP}%</span>
+                  <input type="range" min="0" max={pregradosTipo === '2048' ? 95 : 75} step="5" value={pregradosTipo === '2048' ? porcentaje2048 : porcentajeCP} onChange={(e) => pregradosTipo === '2048' ? setPorcentaje2048(Number(e.target.value)) : setPorcentajeCP(Number(e.target.value))} className="w-24" />
+                </div>
+                <span className="text-xs text-gray-500 block mt-1">{pregradosTipo === '2048' ? `${formatCurrency(valorBaseSemestre * (porcentaje2048 / 100))} por semestre` : `${formatCurrency(valorBaseSemestre * (porcentajeCP / 100))} por semestre`}</span>
+              </div>
+
+              
+            </div>
+          )}
+
+          {/* Controles de posgrados */}
+          {tabActivo === 'posgrado' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <span className="text-xs font-bold text-gray-400 uppercase block">Programa</span>
+                <div className="mt-3 flex flex-col gap-2">
+                  {programas.map(p => (
+                    <button key={p.id} onClick={() => setProgramaSeleccionado(p.id)} className={`text-left py-2 px-3 rounded-lg font-semibold ${programaSeleccionado === p.id ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-700'}`}>
+                      {p.nombre}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <span className="text-xs font-bold text-gray-400 uppercase block">% a Financiar</span>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-2xl font-black text-gray-900">{porcentajePosgrado}%</span>
+                  <input type="range" min="0" max="100" step="5" value={porcentajePosgrado} onChange={(e) => setPorcentajePosgrado(Number(e.target.value))} className="w-24 accent-purple-700 cursor-pointer" />
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <span className="text-xs font-bold text-gray-400 uppercase block">Semestres y créditos</span>
+                <div className="mt-3 text-sm text-gray-700">
+                  {getCreditsPerSemester(programaSeleccionado).map((c, i) => (
+                    <div key={i} className="flex justify-between py-1"> <span>Semestre {i+1}</span> <span className="font-semibold">{c} cr.</span> </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <span className="text-xs font-bold text-gray-400 uppercase block">Apoyo</span>
+                <div className="flex gap-2 mt-3 flex-col">
+                  <button onClick={() => setApoyoPosgrado('vega_corto')} className={`py-2 rounded-lg font-bold text-sm ${apoyoPosgrado === 'vega_corto' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>Vega Lara - Corto Plazo (1.0% M.V.)</button>
+                  <button onClick={() => setApoyoPosgrado('vega_mediano')} className={`py-2 rounded-lg font-bold text-sm ${apoyoPosgrado === 'vega_mediano' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>Vega Lara - Mediano Plazo (1.3% M.V.)</button>
+                  {programaSeleccionado === 'esp_liderazgo' && (
+                    <button onClick={() => setApoyoPosgrado('progresandes')} className={`py-2 rounded-lg font-bold text-sm ${apoyoPosgrado === 'progresandes' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'}`}>Progresandes (1.0% M.V.)</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Tarjetas de Métricas */}
+          <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4`}>
+            {tabActivo === 'posgrado' ? (
+              <>
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                  <span className="text-xs font-bold text-gray-400 uppercase block">Valor Total Créditos</span>
+                  <span className="text-2xl font-black text-gray-900 block mt-1">{formatCurrency(datosActuales.metricas.valorTotalMatricula)}</span>
+                  <span className="text-xs text-gray-500 block mt-0.5">{datosActuales.metricas.totalCreditos} créditos</span>
+                </div>
+
+                <div className="bg-purple-50 p-5 rounded-2xl shadow-sm border border-purple-100">
+                  <span className="text-xs font-bold text-purple-800 uppercase block">Financiamiento</span>
+                  <span className="text-2xl font-black text-purple-950 block mt-1">{formatCurrency(datosActuales.metricas.valorMatriculaFinanciada)}</span>
+                  <span className="text-xs text-purple-700 block mt-0.5">{datosActuales.metricas.porcentajeFinanciamiento}% del total</span>
+                </div>
+
+                <div className="bg-blue-50 p-5 rounded-2xl shadow-sm border border-blue-100">
+                  <span className="text-xs font-bold text-blue-800 uppercase block">Copago Estudiante</span>
+                  <span className="text-2xl font-black text-blue-950 block mt-1">{formatCurrency(datosActuales.metricas.copagoPosgrado)}</span>
+                  <span className="text-xs text-blue-700 block mt-0.5">{100 - datosActuales.metricas.porcentajeFinanciamiento}% del total</span>
+                </div>
+
+                <div className="p-5 rounded-2xl shadow-sm border bg-purple-50 border-purple-100">
+                  <span className="text-xs font-bold uppercase block text-purple-800">Intereses Totales</span>
+                  <span className="text-2xl font-black block mt-1 text-purple-950">{formatCurrency(datosActuales.metricas.totalIntereses)}</span>
+                  <span className="text-xs block mt-0.5 text-purple-700">Tasa { (tasaPosgrado*100).toFixed(1) }% M.V.</span>
+                </div>
+
+                {apoyoPosgrado === 'vega_mediano' && (
+                  <div className="bg-purple-50 p-5 rounded-2xl shadow-sm border border-purple-100">
+                    <span className="text-xs font-bold text-purple-800 uppercase block">Aval Total (2%)</span>
+                    <span className="text-2xl font-black text-purple-950 block mt-1">{formatCurrency(datosActuales.metricas.totalAval)}</span>
+                    <span className="text-xs text-purple-700 block mt-0.5">Cobrado durante estudios</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {tabActivo !== 'pregrado' && (
+                  <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                    <span className="text-xs font-bold text-gray-400 uppercase block">% a Financiar</span>
+                    <div className="flex items-center justify-between mt-2">
+                      <span className="text-2xl font-black text-gray-900">{porcentajeActual}%</span>
+                      <input type="range" min="0" max={maxPorcentaje} step="5" value={porcentajeActual} onChange={(e) => setPorcentajeActual(Number(e.target.value))} className="w-24 accent-blue-700 cursor-pointer" />
+                    </div>
+                    <span className="text-xs text-gray-500 block mt-1">{porcentajeActual === 0 ? 'Pago 100% de contado' : `${formatCurrency(valorBaseSemestre * (porcentajeActual / 100))} por semestre`}</span>
+                  </div>
+                )}
+
+                <div className="bg-amber-50 p-5 rounded-2xl shadow-sm border border-amber-100">
+                  <span className="text-xs font-bold text-amber-800 uppercase block">⚠️ Cuota Pico</span>
+                  <span className="text-2xl font-black text-amber-950 block mt-1">{formatCurrency(datosActuales.metricas.maxCuota)}</span>
+                  <span className="text-xs text-amber-700 block mt-0.5">{porcentajeActual === 0 ? 'Monto fijo en cada matrícula' : `Mes ${datosActuales.metricas.mesMaxCuota}`}</span>
+                </div>
+
+                <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                  <span className="text-xs font-bold text-gray-400 uppercase block">Recursos Propios</span>
+                  <span className="text-2xl font-black text-gray-900 block mt-1">{formatCurrency(datosActuales.metricas.totalCopagos)}</span>
+                  <span className="text-xs text-gray-500 block mt-0.5">8 semestres de copago</span>
+                </div>
+
+                  <div className={`p-5 rounded-2xl shadow-sm border ${pregradosTipo === '2048' ? 'bg-emerald-50 border-emerald-100' : 'bg-blue-50 border-blue-100'}`}>
+                  <span className={`text-xs font-bold uppercase block ${pregradosTipo === '2048' ? 'text-emerald-800' : 'text-blue-800'}`}>Intereses Totales</span>
+                  <span className={`text-2xl font-black block mt-1 ${pregradosTipo === '2048' ? 'text-emerald-950' : 'text-blue-950'}`}>{formatCurrency(datosActuales.metricas.totalIntereses)}</span>
+                  <span className={`text-xs block mt-0.5 ${pregradosTipo === '2048' ? 'text-emerald-700' : 'text-blue-700'}`}>Tasa {pregradosTipo === '2048' ? '1.0%' : '1.1%'} M.V.</span>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Tabla de Cronograma */}
+          <div className="bg-white rounded-3xl shadow-xl border border-gray-200 overflow-hidden">
+            <div className="p-5 bg-gray-50 border-b border-gray-100">
+              <h3 className="font-bold text-lg text-gray-900">Cronograma de Flujo de Caja ({displayMonths} meses)</h3>
+              <p className="text-xs text-gray-500 mt-1">Dinero exacto que debe aportar la familia cada mes</p>
+            </div>
+
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+              <table className="w-full text-left text-sm border-collapse">
+                {tabActivo !== 'posgrado' ? (
+                  <>
+                    <thead className="bg-gray-100 text-gray-600 font-bold border-b sticky top-0 z-10">
+                      <tr>
+                        <th className="p-3 text-left">Mes</th>
+                        <th className="p-3 text-amber-800 text-center">Matrícula</th>
+                        <th className="p-3 text-center">Capital</th>
+                        <th className="p-3 text-center">Intereses</th>
+                        <th className={`p-3 text-white font-black text-center ${pregradosTipo === '2048' ? 'bg-emerald-900' : 'bg-blue-900'}`}>Total</th>
+                        <th className="p-3 text-gray-400 text-center text-xs">Saldo Deuda</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {datosActuales.cronograma.filter(item => item.mes <= displayMonths).map((item) => {
+                        const esInscripcion = item.copagoMes > 0;
+                        const esPicoAbsoluto = porcentajeActual > 0 && item.mes === datosActuales.metricas.mesMaxCuota;
+
+                        return (
+                          <tr key={item.mes} className={`hover:bg-gray-50 transition-colors ${esInscripcion ? 'bg-amber-50/40' : ''} ${esPicoAbsoluto ? 'bg-red-100 hover:bg-red-100 font-semibold' : ''}`}>
+                            <td className="p-3 text-left font-bold text-gray-700">
+                              Mes {item.mes}
+                              {esInscripcion && (<span className="block text-[9px] text-amber-700 font-semibold">Semestre {Math.ceil(item.mes / 6)}</span>)}
+                            </td>
+                            <td className={`p-3 text-center font-semibold ${item.copagoMes > 0 ? 'text-amber-700 font-bold' : 'text-gray-300'}`}>{item.copagoMes > 0 ? formatCurrency(item.copagoMes) : '—'}</td>
+                            <td className="p-3 text-center text-gray-600 font-medium text-xs">{item.cuotaCapital > 0 ? formatCurrency(item.cuotaCapital) : '—'}</td>
+                            <td className="p-3 text-center text-gray-500 text-xs italic">{item.cuotaInteres > 0 ? formatCurrency(item.cuotaInteres) : '—'}</td>
+                            <td className={`p-3 text-center font-extrabold text-xs ${esPicoAbsoluto ? 'text-red-900' : pregradosTipo === '2048' ? 'text-emerald-950 bg-emerald-50/20' : 'text-blue-950 bg-blue-50/20'}`}>{formatCurrency(item.totalMes)}</td>
+                            <td className="p-3 text-center text-gray-400 font-mono text-xs">{item.saldoDeudaGlobal > 0 ? formatCurrency(item.saldoDeudaGlobal) : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </>
+                ) : (
+                  <>
+                    <thead className="bg-gray-100 text-gray-600 font-bold border-b sticky top-0 z-10">
+                      <tr>
+                        <th className="p-3 text-left">Mes</th>
+                        <th className="p-3 text-amber-800 text-center">Matrícula</th>
+                        <th className="p-3 text-center">Capital</th>
+                        <th className="p-3 text-center">Intereses</th>
+                        {apoyoPosgrado === 'vega_mediano' && <th className="p-3 text-center text-purple-800">Aval (2%)</th>}
+                        <th className="p-3 bg-purple-900 text-white font-black text-center">Pago</th>
+                        <th className="p-3 text-gray-400 text-center text-xs">Saldo</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {datosActuales.cronograma.filter(item => item.mes <= displayMonths).map(item => {
+                        const esPostgrado = item.tipo === 'postgrado';
+                        const esPico = item.mes === datosActuales.metricas.mesMaxCuota;
+
+                        return (
+                          <tr key={item.mes} className={`hover:bg-gray-50 transition-colors ${esPostgrado ? 'bg-purple-50/30' : 'bg-purple-50/10'} ${esPico ? 'bg-red-100 font-semibold' : ''}`}>
+                            <td className="p-3 text-left font-bold text-gray-700">
+                              Mes {item.mes}
+                              <span className={`block text-[9px] font-semibold ${esPostgrado ? 'text-purple-700' : 'text-blue-700'}`}>{esPostgrado ? 'Post-grado' : 'En estudio'}</span>
+                            </td>
+                            <td className={`p-3 text-center font-semibold ${item.matricula > 0 ? 'text-amber-700 font-bold' : 'text-gray-300'}`}>{item.matricula > 0 ? formatCurrency(item.matricula) : '—'}</td>
+                            <td className="p-3 text-center text-gray-600 font-medium text-xs">{item.capital > 0 ? formatCurrency(item.capital) : '—'}</td>
+                            <td className="p-3 text-center text-gray-500 text-xs italic">{item.interes > 0 ? formatCurrency(item.interes) : '—'}</td>
+                            {apoyoPosgrado === 'vega_mediano' && (<td className="p-3 text-center text-purple-600 font-semibold text-xs">{item.aval > 0 ? formatCurrency(item.aval) : '—'}</td>)}
+                            <td className={`p-3 text-center font-extrabold text-xs ${esPico ? 'text-red-900' : 'text-purple-950 bg-purple-50/30'}`}>{formatCurrency(item.pago)}</td>
+                            <td className="p-3 text-center text-gray-400 font-mono text-xs">{item.saldoDeuda > 0 ? formatCurrency(item.saldoDeuda) : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </>
+                )}
+              </table>
+            </div>
+          </div>
+
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<SimuladorFinanciero />);
+  </script>
+</body>
+</html>
